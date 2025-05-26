@@ -7,11 +7,38 @@ from pydantic_ai import Agent, RunContext, ModelRetry
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from httpx import AsyncClient
+import base64
+import logfire
+import nest_asyncio
 
 load_dotenv()
 
+nest_asyncio.apply()
+
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
+LANGFUSE_AUTH = base64.b64encode(f"{LANGFUSE_PUBLIC_KEY}:{LANGFUSE_SECRET_KEY}".encode()).decode()
+ 
+# os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://cloud.langfuse.com/api/public/otel" # EU data region
+os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://us.cloud.langfuse.com/api/public/otel" # US data region
+os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {LANGFUSE_AUTH}"
+
+
+logfire.configure(
+    service_name='henrys_chatbot',
+    # Sending to Logfire is on by default regardless of the OTEL env vars.
+    send_to_logfire=False,
+)
+
 @dataclass
 class Deps:
+    """Dependencies for the agents.
+
+    Attributes:
+        client: AsyncClient for making HTTP requests
+        weather_api_key: API key for Tomorrow.io weather service
+        geo_api_key: API key for geocoding service
+    """
     client: AsyncClient
     weather_api_key: str | None
     geo_api_key: str | None
@@ -41,10 +68,20 @@ manager_agent = Agent(
     model=model,
     system_prompt=manager_prompt,
     deps_type=Deps,
+    instrument=True
 )
 
 @manager_agent.tool
 async def weather_factory(ctx: RunContext[Deps], location: str) -> str:
+    """Get the weather for a location.
+
+    Args:
+        ctx: The context.
+        location: Description of the location to get weather for.
+
+    Returns:
+        str: Weather response from the weather agent.
+    """
     response = await weather_agent.run(location, deps=ctx.deps)
     return response.output
 
@@ -73,7 +110,13 @@ async def get_lat_lng(
 
     Args:
         ctx: The context.
-        location_description: A description of a location.
+        location_description: Description of the location. Must be in English as the geocoding API only accepts English input.
+
+    Returns:
+        dict: Dictionary containing 'lat' and 'lng' coordinates.
+        
+    Raises:
+        ModelRetry: If the location cannot be found.
     """
     if ctx.deps.geo_api_key is None:
         # if no API key is provided, return a dummy response (London)
@@ -97,12 +140,18 @@ async def get_lat_lng(
 
 @weather_agent.tool
 async def get_weather(ctx: RunContext[Deps], lat: float, lng: float) -> dict[str, Any]:
-    """Get the weather at a location.
+    """Get the current weather for a location using latitude and longitude.
 
     Args:
-        ctx: The context.
-        lat: Latitude of the location.
-        lng: Longitude of the location.
+        ctx: The context containing API client and keys.
+        lat: The latitude coordinate.
+        lng: The longitude coordinate.
+
+    Returns:
+        dict: Dictionary containing 'temperature' (in Celsius) and 'description' of the weather.
+        
+    Raises:
+        HTTPError: If the API request fails.
     """
     if ctx.deps.weather_api_key is None:
         # if no API key is provided, return a dummy response
@@ -156,6 +205,11 @@ async def get_weather(ctx: RunContext[Deps], lat: float, lng: float) -> dict[str
 
 @cl.on_chat_start
 def on_start():
+    """Initialize the chat session with required dependencies and agent.
+    
+    Sets up the HTTP client and API keys, and initializes the manager agent
+    for handling user interactions.
+    """
     deps = Deps(
         client=AsyncClient(verify=False),
         weather_api_key=os.getenv('WEATHER_API_KEY'),
@@ -166,6 +220,14 @@ def on_start():
 
 @cl.on_message
 async def on_message(message: cl.Message):
+    """Handle incoming chat messages.
+    
+    Args:
+        message (cl.Message): The incoming message from the user.
+        
+    Returns:
+        None: Sends a response message back to the user.
+    """
     agent = cl.user_session.get("agent")
     deps = cl.user_session.get("deps")
     response = agent.run_sync(message.content, deps=deps)
