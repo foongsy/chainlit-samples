@@ -10,6 +10,7 @@ from httpx import AsyncClient
 import base64
 import logfire
 import nest_asyncio
+from qdrant_client import QdrantClient
 
 load_dotenv()
 
@@ -29,6 +30,11 @@ logfire.configure(
     # Sending to Logfire is on by default regardless of the OTEL env vars.
     send_to_logfire=False,
 )
+
+qdrant = QdrantClient(":memory:")
+
+def build_vector_store(qdrant: QdrantClient):
+    pass
 
 @dataclass
 class Deps:
