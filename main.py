@@ -51,7 +51,7 @@ class Deps:
 
 
 model = OpenAIModel(
-    'google/gemini-2.0-flash-lite-001',
+    'google/gemini-2.5-flash-lite',
     provider=OpenAIProvider(
         base_url='https://openrouter.ai/api/v1',
         api_key=os.getenv("OPENROUTER_API_KEY"),
